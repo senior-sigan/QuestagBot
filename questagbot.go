@@ -2,6 +2,7 @@ package questagbot
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -97,7 +98,7 @@ func init() {
 		if err := sendChatAction(c, apiURL, update, "upload_photo"); err != nil {
 			log.Criticalf(c, "Can't sendChatAction %v", err)
 		}
-		if err := sendPhoto(c, os.Getenv("INSTAGRAM_CLIENT_ID"), apiURL, update, "cat"); err != nil {
+		if err := sendPhoto(c, os.Getenv("INSTAGRAM_CLIENT_ID"), apiURL, update, ""); err != nil {
 			log.Criticalf(c, "Can't sendPhoto %v", err)
 		}
 		return strconv.Itoa(update.ID)
@@ -159,10 +160,22 @@ func sendPhoto(c context.Context, clientdID string, apiURL string, data Update, 
 	if _, err = fw.Write([]byte(data.Message.Chat.GetID())); err != nil {
 		return
 	}
-	if fw, err = w.CreateFormField("caption"); err != nil {
+	if text != "" {
+		if fw, err = w.CreateFormField("caption"); err != nil {
+			return
+		}
+		if _, err = fw.Write([]byte(text)); err != nil {
+			return
+		}
+	}
+	if fw, err = w.CreateFormField("reply_markup"); err != nil {
 		return
 	}
-	if _, err = fw.Write([]byte(text)); err != nil {
+	json, err := keyboardJSON()
+	if err != nil {
+		return
+	}
+	if _, err = fw.Write(json); err != nil {
 		return
 	}
 	if fw, err = w.CreateFormFile("photo", "image.jpg"); err != nil {
@@ -189,5 +202,17 @@ func sendPhoto(c context.Context, clientdID string, apiURL string, data Update, 
 	if res.StatusCode != http.StatusOK {
 		err = fmt.Errorf("bad status: %s", res.Status)
 	}
+	return
+}
+
+// keyboardJSON create json object for ReplyKeyboardMarkup
+func keyboardJSON() (b []byte, err error) {
+	km := &ReplyKeyboardMarkup{
+		Keyboard:        [][]string{{"cat", "dog"}, {"nya", "chick"}},
+		ResizeKeyboard:  true,
+		OneTimeKeyboard: true,
+		Selective:       false,
+	}
+	b, err = json.Marshal(km)
 	return
 }
