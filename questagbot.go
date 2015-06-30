@@ -7,11 +7,13 @@ import (
 	"image"
 	"image/jpeg"
 	"io"
+	"math/rand"
 	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 
 	"golang.org/x/net/context"
 
@@ -78,13 +80,26 @@ type PhotoMessage struct {
 	ReplyMarkup      interface{} `json:"reply_markup"`
 }
 
+// GameState is struct for saving state
+type GameState struct {
+	InstagramClientID string
+	APIURL            string
+	Tags              []string
+	Random            *rand.Rand
+}
+
 func appEngine(c martini.Context, r *http.Request) {
 	c.Map(appengine.NewContext(r))
 }
 
 func init() {
 	godotenv.Load("secrets.env")
-	apiURL := fmt.Sprintf("https://api.telegram.org/bot%v/", os.Getenv("TELEGRAM_KEY"))
+	state := &GameState{
+		InstagramClientID: os.Getenv("INSTAGRAM_CLIENT_ID"),
+		APIURL:            fmt.Sprintf("https://api.telegram.org/bot%v/", os.Getenv("TELEGRAM_KEY")),
+		Tags:              strings.Split(os.Getenv("TAGS"), ","),
+		Random:            rand.New(rand.NewSource(42)),
+	}
 
 	m := martini.Classic()
 	m.Use(appEngine)
@@ -95,10 +110,10 @@ func init() {
 	m.Post("/bothook", binding.Bind(Update{}), func(c context.Context, update Update) string {
 		log.Infof(c, "%v", update)
 		//sendMessage(c, apiURL, update, "Hello")
-		if err := sendChatAction(c, apiURL, update, "upload_photo"); err != nil {
+		if err := state.sendChatAction(c, update, "upload_photo"); err != nil {
 			log.Criticalf(c, "Can't sendChatAction %v", err)
 		}
-		if err := sendPhoto(c, os.Getenv("INSTAGRAM_CLIENT_ID"), apiURL, update, ""); err != nil {
+		if err := state.sendPhoto(c, update, ""); err != nil {
 			log.Criticalf(c, "Can't sendPhoto %v", err)
 		}
 		return strconv.Itoa(update.ID)
@@ -106,12 +121,12 @@ func init() {
 	http.Handle("/", m)
 }
 
-func sendMessage(c context.Context, apiURL string, data Update, text string) {
+func (state GameState) sendMessage(c context.Context, data Update, text string) {
 	httpClient := urlfetch.Client(c)
 	query := url.Values{}
 	query.Set("text", "Hello")
 	query.Add("chat_id", strconv.Itoa(data.Message.Chat.ID))
-	url := apiURL + "sendMessage"
+	url := state.APIURL + "sendMessage"
 	log.Infof(c, "%v", url)
 	r, err := http.NewRequest("POST", url, bytes.NewBufferString(query.Encode()))
 	if err != nil {
@@ -126,12 +141,12 @@ func sendMessage(c context.Context, apiURL string, data Update, text string) {
 	log.Infof(c, "%v", resp)
 }
 
-func sendChatAction(c context.Context, apiURL string, data Update, action string) (err error) {
+func (state GameState) sendChatAction(c context.Context, data Update, action string) (err error) {
 	httpClient := urlfetch.Client(c)
 	query := url.Values{}
 	query.Set("action", action)
 	query.Add("chat_id", strconv.Itoa(data.Message.Chat.ID))
-	url := apiURL + "sendChatAction"
+	url := state.APIURL + "sendChatAction"
 	r, err := http.NewRequest("POST", url, bytes.NewBufferString(query.Encode()))
 	if err != nil {
 		return
@@ -143,9 +158,9 @@ func sendChatAction(c context.Context, apiURL string, data Update, action string
 	return
 }
 
-func sendPhoto(c context.Context, clientdID string, apiURL string, data Update, text string) (err error) {
+func (state GameState) sendPhoto(c context.Context, data Update, text string) (err error) {
 	httpClient := urlfetch.Client(c)
-	hexapicAPI := hexapic.NewSearchApi(clientdID, httpClient)
+	hexapicAPI := hexapic.NewSearchApi(state.InstagramClientID, httpClient)
 	hexapicAPI.Count = 4
 	var (
 		imageQuality = jpeg.Options{Quality: jpeg.DefaultQuality}
@@ -181,14 +196,14 @@ func sendPhoto(c context.Context, clientdID string, apiURL string, data Update, 
 	if fw, err = w.CreateFormFile("photo", "image.jpg"); err != nil {
 		return
 	}
-	imgs = hexapicAPI.SearchByTag("cat")
+	imgs = hexapicAPI.SearchByTag(state.NextTag())
 	img := hexapic.GenerateCollage(imgs, 2, 2)
 	if err = jpeg.Encode(fw, img, &imageQuality); err != nil {
 		return
 	}
 	w.Close()
 
-	req, err := http.NewRequest("POST", apiURL+"sendPhoto", &b)
+	req, err := http.NewRequest("POST", state.APIURL+"sendPhoto", &b)
 	if err != nil {
 		return
 	}
@@ -203,6 +218,11 @@ func sendPhoto(c context.Context, clientdID string, apiURL string, data Update, 
 		err = fmt.Errorf("bad status: %s", res.Status)
 	}
 	return
+}
+
+// NextTag generate next tag for question
+func (state GameState) NextTag() string {
+	return state.Tags[state.Random.Intn(len(state.Tags))]
 }
 
 // keyboardJSON create json object for ReplyKeyboardMarkup
