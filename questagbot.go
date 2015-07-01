@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"image"
 	"image/jpeg"
 	"io"
 	"math/rand"
@@ -25,6 +24,8 @@ import (
 	log "google.golang.org/appengine/log"
 	urlfetch "google.golang.org/appengine/urlfetch"
 )
+
+var random = rand.New(rand.NewSource(42))
 
 // Update struct from telegram Webhook API
 type Update struct {
@@ -85,7 +86,14 @@ type GameState struct {
 	InstagramClientID string
 	APIURL            string
 	Tags              []string
-	Random            *rand.Rand
+	Questions         []Question
+	CurrentQuestion   int
+}
+
+// Question is struct to store question object
+type Question struct {
+	Answer   string
+	Variants []string
 }
 
 func appEngine(c martini.Context, r *http.Request) {
@@ -94,11 +102,13 @@ func appEngine(c martini.Context, r *http.Request) {
 
 func init() {
 	godotenv.Load("secrets.env")
+	tags := strings.Split(os.Getenv("TAGS"), ",")
 	state := &GameState{
 		InstagramClientID: os.Getenv("INSTAGRAM_CLIENT_ID"),
 		APIURL:            fmt.Sprintf("https://api.telegram.org/bot%v/", os.Getenv("TELEGRAM_KEY")),
-		Tags:              strings.Split(os.Getenv("TAGS"), ","),
-		Random:            rand.New(rand.NewSource(42)),
+		Tags:              tags,
+		Questions:         generateQuestionsQueue(tags),
+		CurrentQuestion:   0,
 	}
 
 	m := martini.Classic()
@@ -124,7 +134,7 @@ func init() {
 func (state GameState) sendMessage(c context.Context, data Update, text string) {
 	httpClient := urlfetch.Client(c)
 	query := url.Values{}
-	query.Set("text", "Hello")
+	query.Set("text", text)
 	query.Add("chat_id", strconv.Itoa(data.Message.Chat.ID))
 	url := state.APIURL + "sendMessage"
 	log.Infof(c, "%v", url)
@@ -162,11 +172,12 @@ func (state GameState) sendPhoto(c context.Context, data Update, text string) (e
 	httpClient := urlfetch.Client(c)
 	hexapicAPI := hexapic.NewSearchApi(state.InstagramClientID, httpClient)
 	hexapicAPI.Count = 4
+	question := state.NextQuestion(c)
+	log.Infof(c, "%v", state.Questions)
 	var (
 		imageQuality = jpeg.Options{Quality: jpeg.DefaultQuality}
 		b            bytes.Buffer
 		fw           io.Writer
-		imgs         []image.Image
 	)
 	w := multipart.NewWriter(&b)
 	if fw, err = w.CreateFormField("chat_id"); err != nil {
@@ -186,7 +197,7 @@ func (state GameState) sendPhoto(c context.Context, data Update, text string) (e
 	if fw, err = w.CreateFormField("reply_markup"); err != nil {
 		return
 	}
-	json, err := keyboardJSON()
+	json, err := keyboardJSON(question.Variants)
 	if err != nil {
 		return
 	}
@@ -196,7 +207,7 @@ func (state GameState) sendPhoto(c context.Context, data Update, text string) (e
 	if fw, err = w.CreateFormFile("photo", "image.jpg"); err != nil {
 		return
 	}
-	imgs = hexapicAPI.SearchByTag(state.NextTag())
+	imgs := hexapicAPI.SearchByTag(question.Answer)
 	img := hexapic.GenerateCollage(imgs, 2, 2)
 	if err = jpeg.Encode(fw, img, &imageQuality); err != nil {
 		return
@@ -220,15 +231,57 @@ func (state GameState) sendPhoto(c context.Context, data Update, text string) (e
 	return
 }
 
-// NextTag generate next tag for question
-func (state GameState) NextTag() string {
-	return state.Tags[state.Random.Intn(len(state.Tags))]
+// NextQuestion return next question
+func (state GameState) NextQuestion(c context.Context) (question Question) {
+	question = state.Questions[state.CurrentQuestion]
+	log.Infof(c, "Question: %v", question)
+	state.CurrentQuestion++
+	if state.CurrentQuestion == len(state.Tags) {
+		state.CurrentQuestion = 0
+	}
+	return
+}
+
+func generateQuestionsQueue(tags []string) []Question {
+	answers := random.Perm(len(tags))
+	questions := make([]Question, 0, len(tags))
+	for answer := range answers {
+		variants := perm(4, len(tags), answer)
+
+		variantsStr := make([]string, len(variants))
+		for i, variant := range variants {
+			variantsStr[i] = tags[variant]
+		}
+
+		question := Question{
+			Answer:   tags[answer],
+			Variants: variantsStr,
+		}
+
+		questions = append(questions, question)
+	}
+
+	return questions
+}
+
+func perm(size int, limit int, exclude int) []int {
+	array := make([]int, size)
+	i := 0
+	for i < size-1 {
+		r := rand.Intn(limit)
+		if r != exclude {
+			array[i] = r
+			i++
+		}
+	}
+	array[size-1] = exclude
+	return array
 }
 
 // keyboardJSON create json object for ReplyKeyboardMarkup
-func keyboardJSON() (b []byte, err error) {
+func keyboardJSON(v []string) (b []byte, err error) {
 	km := &ReplyKeyboardMarkup{
-		Keyboard:        [][]string{{"cat", "dog"}, {"nya", "chick"}},
+		Keyboard:        [][]string{{v[0], v[1]}, {v[2], v[3]}},
 		ResizeKeyboard:  true,
 		OneTimeKeyboard: true,
 		Selective:       false,
