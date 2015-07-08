@@ -121,3 +121,9 @@ type ReplyKeyboardMarkup struct {
 	OneTimeKeyboard bool       `json:"one_time_keyboard,omitempty"`
 	Selective       bool       `json:"selective,omitempty"`
 }
+
+// Update struct represents an incoming update.
+type Update struct {
+	ID      int     `json:"update_id"`
+	Message Message `json:"message,omitempty"`
+}
