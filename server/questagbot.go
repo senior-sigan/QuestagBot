@@ -1,6 +1,7 @@
 package questagbot
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -10,13 +11,13 @@ import (
 
 	//hexapic "github.com/blan4/hexapic/core"
 	"github.com/blan4/QuestagBot/telegram"
-
 	"github.com/codegangsta/martini"
 	"github.com/codegangsta/martini-contrib/binding"
 	"github.com/joho/godotenv"
-	"golang.org/x/net/context"
-	"google.golang.org/appengine"
-	"google.golang.org/appengine/log"
+	"github.com/mjibson/goon"
+
+	"appengine"
+	"appengine/datastore"
 )
 
 var random = rand.New(rand.NewSource(42))
@@ -30,17 +31,69 @@ type Global struct {
 
 // Question is struct to store question object
 type Question struct {
-	Answer   string
-	Variants []string
+	Answer   string   `json:"answer"`
+	Variants []string `json:"variants"`
 }
 
 // Gamer is object to store in appengine datastore
 type Gamer struct {
-	ChatID          int
-	Questions       []Question
-	CurrentQuestion int
-	RightAnswers    int
-	WrongAnswers    int
+	ChatID          int        `json:"chat_id"`
+	Questions       []Question `json:"questions"`
+	CurrentQuestion int        `json:"current_question"`
+	RightAnswers    int        `json:"right_answers"`
+	WrongAnswers    int        `json:"wrong_answers"`
+}
+
+// GamerData is wrapper for appengine data store
+type GamerData struct {
+	ChatID    string `datastore:"-" goon:"id"`
+	GamerBlob string
+	Gamer     *Gamer `datastore:"-"`
+}
+
+// Load is google store Question struct loader
+func (data *GamerData) Load(p <-chan datastore.Property) error {
+	if err := datastore.LoadStruct(data, p); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Save is google store Question struct saver
+func (data *GamerData) Save(p chan<- datastore.Property) error {
+	defer close(p)
+	blob, err := json.Marshal(data.Gamer)
+	if err != nil {
+		panic(err)
+	}
+
+	p <- datastore.Property{
+		Name:    "GamerBlob",
+		Value:   string(blob),
+		NoIndex: true,
+	}
+	return nil
+}
+
+func findGamer(c appengine.Context, gamer *Gamer) error {
+	g := goon.FromContext(c)
+	data := new(GamerData)
+	data.ChatID = strconv.Itoa(gamer.ChatID)
+	c.Debugf("data: %v", gamer.ChatID)
+	if err := g.Get(data); err != nil {
+		return err
+	}
+	return json.Unmarshal([]byte(data.GamerBlob), gamer)
+}
+
+func saveGamer(c appengine.Context, gamer *Gamer) (err error) {
+	g := goon.FromContext(c)
+	data := new(GamerData)
+	data.ChatID = strconv.Itoa(gamer.ChatID)
+	data.Gamer = gamer
+	g.Put(data)
+
+	return
 }
 
 func appEngine(c martini.Context, r *http.Request) {
@@ -61,9 +114,14 @@ func init() {
 	m.Get("/", func() string {
 		return "Hello world"
 	})
-	m.Post("/bothook", binding.Bind(telegram.Update{}), func(c context.Context, update telegram.Update) string {
-		log.Infof(c, "%v", update)
-		findOrCreateGamer(update)
+	m.Post("/bothook", binding.Bind(telegram.Update{}), func(c appengine.Context, update telegram.Update, w http.ResponseWriter) string {
+		c.Infof("%v", update)
+		gamer, err := findOrCreateGamer(update, c)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			c.Errorf("Can't find or create gamer: %v", err)
+		}
+		c.Infof("Gamer : %v", gamer)
 		//sendMessage(c, apiURL, update, "Hello")
 		// if err := sendChatAction(c, update, "upload_photo"); err != nil {
 		// 	log.Criticalf(c, "Can't sendChatAction %v", err)
@@ -76,8 +134,22 @@ func init() {
 	http.Handle("/", m)
 }
 
-func findOrCreateGamer(update telegram.Update) *Gamer {
-	return nil
+func findOrCreateGamer(update telegram.Update, c appengine.Context) (*Gamer, error) {
+	gamer := new(Gamer)
+	chatID := update.Message.Chat.ID
+	gamer.ChatID = chatID
+	if err := findGamer(c, gamer); err != nil {
+		c.Infof("Can't find gamer object for this chat: %v, %v", chatID, err)
+		gamer.handleStart()
+		if err := saveGamer(c, gamer); err != nil {
+			c.Errorf("Can't store in DB new gamer %v: %v", gamer, err)
+			return nil, err
+		}
+		c.Infof("Saved: %v", gamer.ChatID)
+	} else {
+		c.Infof("Find gamer with id %v", chatID)
+	}
+	return gamer, nil
 }
 
 // func generateImage() {
@@ -89,20 +161,20 @@ func findOrCreateGamer(update telegram.Update) *Gamer {
 // }
 
 // GetCurrentQuestion is helper method to get current question
-func (gamer Gamer) GetCurrentQuestion() Question {
+func (gamer *Gamer) GetCurrentQuestion() Question {
 	return gamer.Questions[gamer.CurrentQuestion]
 }
-func (gamer Gamer) handleStart() {
+func (gamer *Gamer) handleStart() {
 	gamer.Questions = generateQuestionsQueue()
 	gamer.CurrentQuestion = 0
 }
-func (gamer Gamer) handleStop() {
+func (gamer *Gamer) handleStop() {
 	gamer.Questions = nil
 	gamer.CurrentQuestion = 0
 }
-func (gamer Gamer) handleTop()  {}
-func (gamer Gamer) handleHelp() {}
-func (gamer Gamer) handleAnswer(answer string) (isRight bool) {
+func (gamer *Gamer) handleTop()  {}
+func (gamer *Gamer) handleHelp() {}
+func (gamer *Gamer) handleAnswer(answer string) (isRight bool) {
 	currentQuestion := gamer.GetCurrentQuestion()
 	if currentQuestion.Answer == answer {
 		gamer.RightAnswers++
@@ -116,7 +188,7 @@ func (gamer Gamer) handleAnswer(answer string) (isRight bool) {
 }
 
 // NextQuestion return next question
-func (gamer Gamer) NextQuestion() (question Question) {
+func (gamer *Gamer) NextQuestion() (question Question) {
 	question = gamer.Questions[gamer.CurrentQuestion]
 	gamer.CurrentQuestion++
 	if gamer.CurrentQuestion == len(global.Tags) {

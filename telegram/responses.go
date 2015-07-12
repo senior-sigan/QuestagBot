@@ -11,7 +11,7 @@ type Response struct {
 
 // User struct represents a Telegram user or bot.
 type User struct {
-	ID        int    `json:"id"`
+	ID        int  `json:"id"`
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name,omitempty"`
 	Username  string `json:"username,omitempty"`
@@ -19,8 +19,13 @@ type User struct {
 
 // GroupChat struct represents a group chat.
 type GroupChat struct {
-	ID    int    `json:"id"`
+	ID    int  `json:"id"`
 	Title string `json:"title"`
+}
+
+// CommonChat struct is base struct for Chat or User object
+type CommonChat struct {
+	ID int `json:"id"`
 }
 
 // Message struct represents a message.
@@ -28,7 +33,7 @@ type Message struct {
 	MessageID           int         `json:"message_id"`
 	From                User        `json:"from"`
 	Date                int         `json:"date"`
-	Chat                interface{} `json:"chat"`
+	Chat                CommonChat  `json:"chat"`
 	ForwardFrom         User        `json:"forward_from,omitempty"`
 	ForwardDate         int         `json:"forward_date,omitempty"`
 	ReplyToMessage      *Message    `json:"reply_to_message,omitempty"`
@@ -53,7 +58,7 @@ type PhotoSize struct {
 	FileID   string `json:"file_id"`
 	Width    int    `json:"width"`
 	Height   int    `json:"height"`
-	FileSize int    `json:"file_size,omitempty"`
+	FileSize int  `json:"file_size,omitempty"`
 }
 
 // Audio struct represents an audio file (voice note).
@@ -61,7 +66,7 @@ type Audio struct {
 	FileID   string `json:"file_id"`
 	Duration int    `json:"duration"`
 	MimeType string `json:"mime_type,omitempty"`
-	FileSize int    `json:"file_size,omitempty"`
+	FileSize int  `json:"file_size,omitempty"`
 }
 
 // Document struct represents a general file (as opposed to photos and audio files).
@@ -70,7 +75,7 @@ type Document struct {
 	Thumb    PhotoSize `json:"thumb"`
 	FileName string    `json:"file_name,omitempty"`
 	MimeType string    `json:"mime_type,omitempty"`
-	FileSize int       `json:"file_size,omitempty"`
+	FileSize int     `json:"file_size,omitempty"`
 }
 
 // Sticker struct
@@ -79,7 +84,7 @@ type Sticker struct {
 	Width    int       `json:"width"`
 	Height   int       `json:"heiht"`
 	Thumb    PhotoSize `json:"thumb"`
-	FileSize int       `json:"file_size,omitempty"`
+	FileSize int     `json:"file_size,omitempty"`
 }
 
 // Video struct represents a video file.
@@ -90,7 +95,7 @@ type Video struct {
 	Duration int       `json:"duration"`
 	Thumb    PhotoSize `json:"thumb"`
 	MimeType string    `json:"mime_type,omitempty"`
-	FileSize int       `json:"fil_size,omitempty"`
+	FileSize int     `json:"fil_size,omitempty"`
 	Caption  string    `json:"caption,omitempty"`
 }
 
@@ -124,6 +129,6 @@ type ReplyKeyboardMarkup struct {
 
 // Update struct represents an incoming update.
 type Update struct {
-	ID      int     `json:"update_id"`
+	ID      int   `json:"update_id"`
 	Message Message `json:"message,omitempty"`
 }
