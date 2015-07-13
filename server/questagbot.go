@@ -9,15 +9,17 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/net/context"
+
 	//hexapic "github.com/blan4/hexapic/core"
 	"github.com/blan4/QuestagBot/telegram"
 	"github.com/codegangsta/martini"
 	"github.com/codegangsta/martini-contrib/binding"
 	"github.com/joho/godotenv"
-	"github.com/mjibson/goon"
 
-	"appengine"
-	"appengine/datastore"
+	"google.golang.org/appengine"
+	"google.golang.org/appengine/datastore"
+	"google.golang.org/appengine/log"
 )
 
 var random = rand.New(rand.NewSource(42))
@@ -46,53 +48,49 @@ type Gamer struct {
 
 // GamerData is wrapper for appengine data store
 type GamerData struct {
-	ChatID    string `datastore:"-" goon:"id"`
 	GamerBlob string
 	Gamer     *Gamer `datastore:"-"`
 }
 
 // Load is google store Question struct loader
-func (data *GamerData) Load(p <-chan datastore.Property) error {
+func (data *GamerData) Load(p []datastore.Property) error {
 	if err := datastore.LoadStruct(data, p); err != nil {
 		return err
 	}
-	return nil
+	data.Gamer = new(Gamer)
+	return json.Unmarshal([]byte(data.GamerBlob), data.Gamer)
 }
 
 // Save is google store Question struct saver
-func (data *GamerData) Save(p chan<- datastore.Property) error {
-	defer close(p)
+func (data *GamerData) Save() ([]datastore.Property, error) {
 	blob, err := json.Marshal(data.Gamer)
 	if err != nil {
 		panic(err)
 	}
 
-	p <- datastore.Property{
-		Name:    "GamerBlob",
-		Value:   string(blob),
-		NoIndex: true,
-	}
-	return nil
+	return []datastore.Property{
+		datastore.Property{
+			Name:    "GamerBlob",
+			Value:   string(blob),
+			NoIndex: true,
+		},
+	}, nil
 }
 
-func findGamer(c appengine.Context, gamer *Gamer) error {
-	g := goon.FromContext(c)
+func findGamer(c context.Context, id int64) (*Gamer, error) {
 	data := new(GamerData)
-	data.ChatID = strconv.Itoa(gamer.ChatID)
-	c.Debugf("data: %v", gamer.ChatID)
-	if err := g.Get(data); err != nil {
-		return err
+	key := datastore.NewKey(c, "Gamer", "", id, nil)
+	if err := datastore.Get(c, key, data); err != nil {
+		return new(Gamer), err
 	}
-	return json.Unmarshal([]byte(data.GamerBlob), gamer)
+	return data.Gamer, nil
 }
 
-func saveGamer(c appengine.Context, gamer *Gamer) (err error) {
-	g := goon.FromContext(c)
+func saveGamer(c context.Context, gamer *Gamer) (err error) {
 	data := new(GamerData)
-	data.ChatID = strconv.Itoa(gamer.ChatID)
 	data.Gamer = gamer
-	g.Put(data)
-
+	key := datastore.NewKey(c, "Gamer", "", int64(gamer.ChatID), nil)
+	_, err = datastore.Put(c, key, data)
 	return
 }
 
@@ -114,14 +112,15 @@ func init() {
 	m.Get("/", func() string {
 		return "Hello world"
 	})
-	m.Post("/bothook", binding.Bind(telegram.Update{}), func(c appengine.Context, update telegram.Update, w http.ResponseWriter) string {
-		c.Infof("%v", update)
+	m.Post("/bothook", binding.Bind(telegram.Update{}), func(c context.Context, update telegram.Update, w http.ResponseWriter) string {
+		log.Infof(c, "%v", update)
 		gamer, err := findOrCreateGamer(update, c)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			c.Errorf("Can't find or create gamer: %v", err)
+			log.Errorf(c, "Can't find or create gamer: %v", err)
 		}
-		c.Infof("Gamer : %v", gamer)
+		log.Infof(c, "Gamer : %v", gamer.ChatID)
+		//handleComand(update)
 		//sendMessage(c, apiURL, update, "Hello")
 		// if err := sendChatAction(c, update, "upload_photo"); err != nil {
 		// 	log.Criticalf(c, "Can't sendChatAction %v", err)
@@ -134,20 +133,19 @@ func init() {
 	http.Handle("/", m)
 }
 
-func findOrCreateGamer(update telegram.Update, c appengine.Context) (*Gamer, error) {
-	gamer := new(Gamer)
+func findOrCreateGamer(update telegram.Update, c context.Context) (gamer *Gamer, err error) {
 	chatID := update.Message.Chat.ID
-	gamer.ChatID = chatID
-	if err := findGamer(c, gamer); err != nil {
-		c.Infof("Can't find gamer object for this chat: %v, %v", chatID, err)
+	if gamer, err = findGamer(c, int64(chatID)); err != nil {
+		log.Infof(c, "Can't find gamer object for this chat: %v, %v", chatID, err)
 		gamer.handleStart()
+		gamer.ChatID = chatID
 		if err := saveGamer(c, gamer); err != nil {
-			c.Errorf("Can't store in DB new gamer %v: %v", gamer, err)
+			log.Errorf(c, "Can't store in DB new gamer %v: %v", gamer, err)
 			return nil, err
 		}
-		c.Infof("Saved: %v", gamer.ChatID)
+		log.Infof(c, "Saved: %v", gamer.ChatID)
 	} else {
-		c.Infof("Find gamer with id %v", chatID)
+		log.Infof(c, "Find gamer with id %v", chatID)
 	}
 	return gamer, nil
 }
