@@ -2,17 +2,16 @@ package questagbot
 
 import (
 	"encoding/json"
-	"fmt"
+	"image"
 	"math/rand"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 
 	"golang.org/x/net/context"
 
-	//hexapic "github.com/blan4/hexapic/core"
 	"github.com/blan4/QuestagBot/telegram"
+	hexapic "github.com/blan4/hexapic/core"
 	"github.com/codegangsta/martini"
 	"github.com/codegangsta/martini-contrib/binding"
 	"github.com/joho/godotenv"
@@ -20,6 +19,7 @@ import (
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
+	"google.golang.org/appengine/urlfetch"
 )
 
 var random = rand.New(rand.NewSource(42))
@@ -27,8 +27,8 @@ var random = rand.New(rand.NewSource(42))
 // Global is struct for saving state
 type Global struct {
 	InstagramClientID string
-	APIURL            string
 	Tags              []string
+	TelegramKey       string
 }
 
 // Question is struct to store question object
@@ -104,7 +104,7 @@ func init() {
 	godotenv.Load("secrets.env")
 	global.Tags = strings.Split(os.Getenv("TAGS"), ",")
 	global.InstagramClientID = os.Getenv("INSTAGRAM_CLIENT_ID")
-	global.APIURL = fmt.Sprintf("https://api.telegram.org/bot%v/", os.Getenv("TELEGRAM_KEY"))
+	global.TelegramKey = os.Getenv("TELEGRAM_KEY")
 
 	m := martini.Classic()
 	m.Use(appEngine)
@@ -112,23 +112,56 @@ func init() {
 	m.Get("/", func() string {
 		return "Hello world"
 	})
-	m.Post("/bothook", binding.Bind(telegram.Update{}), func(c context.Context, update telegram.Update, w http.ResponseWriter) string {
+	m.Post("/bothook", binding.Bind(telegram.Update{}), func(c context.Context, update telegram.Update, w http.ResponseWriter) {
+		httpClient := urlfetch.Client(c)
+		tele := telegram.NewTelegram(httpClient, global.TelegramKey)
 		log.Infof(c, "%v", update)
 		gamer, err := findOrCreateGamer(update, c)
+		defer saveGamer(c, gamer)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			log.Errorf(c, "Can't find or create gamer: %v", err)
+			return
 		}
 		log.Infof(c, "Gamer : %v", gamer.ChatID)
-		//handleComand(update)
-		//sendMessage(c, apiURL, update, "Hello")
-		// if err := sendChatAction(c, update, "upload_photo"); err != nil {
-		// 	log.Criticalf(c, "Can't sendChatAction %v", err)
-		// }
-		// if err := sendPhoto(c, update, ""); err != nil {
-		// 	log.Criticalf(c, "Can't sendPhoto %v", err)
-		// }
-		return strconv.Itoa(update.ID)
+
+		if strings.Index(update.Message.Text, "/start") == 0 {
+			log.Infof(c, "Start game with %v, %v", gamer.ChatID, update.Message.From.Username)
+			gamer.handleStart()
+			tele.SendPhoto(update.Message.Chat.ID, generateImage(gamer.NextQuestion(), httpClient), "", 0, gamer.GetKeyboard())
+			return
+		}
+		if strings.Index(update.Message.Text, "/stop") == 0 {
+			log.Infof(c, "Stop game with %v, %v", gamer.ChatID, update.Message.From.Username)
+			gamer.handleStop()
+			tele.SendMessage(update.Message.Chat.ID, "Game over", true, 0, nil)
+			return
+		}
+		if strings.Index(update.Message.Text, "/top") == 0 {
+			log.Infof(c, "Show top for %v, %v", gamer.ChatID, update.Message.From.Username)
+			gamer.handleTop()
+			tele.SendMessage(update.Message.Chat.ID, "Top 10 gamers", true, 0, nil)
+			return
+		}
+		if strings.Index(update.Message.Text, "/help") == 0 {
+			log.Infof(c, "Show help for %v, %v", gamer.ChatID, update.Message.From.Username)
+			tele.SendMessage(update.Message.Chat.ID, "Todo: help page", true, 0, nil)
+			return
+		}
+		if gamer.isPlaying() {
+			log.Infof(c, "Get answer from %v, %v on question %v", gamer.ChatID, update.Message.From.Username, gamer.GetCurrentQuestion())
+			if gamer.handleAnswer(update.Message.Text) {
+				log.Infof(c, "Right answer, gamer: %v, %v", gamer.ChatID, update.Message.From.Username)
+				tele.SendMessage(update.Message.Chat.ID, "👍 Right!", true, 0, nil)
+			} else {
+				log.Infof(c, "Wrong answer, gamer: %v, %v", gamer.ChatID, update.Message.From.Username)
+				tele.SendMessage(update.Message.Chat.ID, "😕 Wrong, "+gamer.GetCurrentQuestion().Answer, true, 0, nil)
+			}
+			tele.SendPhoto(update.Message.Chat.ID, generateImage(gamer.NextQuestion(), httpClient), "", 0, gamer.GetKeyboard())
+			return
+		}
+		log.Infof(c, "Show help for %v, %v", gamer.ChatID, update.Message.From.Username)
+		tele.SendMessage(update.Message.Chat.ID, "Todo: help page", true, 0, nil)
 	})
 	http.Handle("/", m)
 }
@@ -150,13 +183,24 @@ func findOrCreateGamer(update telegram.Update, c context.Context) (gamer *Gamer,
 	return gamer, nil
 }
 
-// func generateImage() {
-// 	hexapicAPI := hexapic.NewSearchApi(global.InstagramClientID, httpClient)
-// 	hexapicAPI.Count = 4
-// 	imgs := hexapicAPI.SearchByTag(question.Answer)
-// 	img := hexapic.GenerateCollage(imgs, 2, 2)
-// 	question := state.NextQuestion()
-// }
+func generateImage(question Question, httpClient *http.Client) (img image.Image) {
+	hexapicAPI := hexapic.NewSearchApi(global.InstagramClientID, httpClient)
+	hexapicAPI.Count = 4
+	imgs := hexapicAPI.SearchByTag(question.Answer)
+	img = hexapic.GenerateCollage(imgs, 2, 2)
+	return
+}
+
+// GetKeyboard helper to generate keyboard markup
+func (gamer *Gamer) GetKeyboard() (kb *telegram.ReplyKeyboardMarkup) {
+	question := gamer.GetCurrentQuestion()
+	kb.OneTimeKeyboard = true
+	kb.Keyboard = [][]string{
+		[]string{question.Variants[0], question.Variants[1]},
+		[]string{question.Variants[2], question.Variants[3]},
+	}
+	return nil
+}
 
 // GetCurrentQuestion is helper method to get current question
 func (gamer *Gamer) GetCurrentQuestion() Question {
@@ -185,9 +229,13 @@ func (gamer *Gamer) handleAnswer(answer string) (isRight bool) {
 	return
 }
 
+func (gamer *Gamer) isPlaying() bool {
+	return gamer.Questions != nil
+}
+
 // NextQuestion return next question
 func (gamer *Gamer) NextQuestion() (question Question) {
-	question = gamer.Questions[gamer.CurrentQuestion]
+	question = gamer.GetCurrentQuestion()
 	gamer.CurrentQuestion++
 	if gamer.CurrentQuestion == len(global.Tags) {
 		gamer.CurrentQuestion = 0
