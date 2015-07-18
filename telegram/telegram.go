@@ -95,6 +95,9 @@ func (telegram Telegram) SendMessage(chatID int, text string, disableWebPagePrev
 
 // SendPhoto - Use this method to send photos.
 func (telegram Telegram) SendPhoto(chatID int, photo image.Image, caption string, replyToMessageID int, replyMarkup *ReplyKeyboardMarkup) (*Message, error) {
+	if err := telegram.sendChatAction(chatID, "upload_photo"); err != nil {
+		return nil, err
+	}
 	var (
 		uri          = telegram.botURL + "sendPhoto"
 		imageQuality = jpeg.Options{Quality: jpeg.DefaultQuality}

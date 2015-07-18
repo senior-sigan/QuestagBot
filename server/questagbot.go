@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"golang.org/x/net/context"
 
@@ -20,9 +21,10 @@ import (
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/urlfetch"
+	"fmt"
 )
 
-var random = rand.New(rand.NewSource(42))
+const HelpText string = "Guess as more instagram tags as you can!\n/start - begin a quizz\n/stop - stop current quiz\n/status - see your results\n/top - show top 10 players"
 
 // Global is struct for saving state
 type Global struct {
@@ -101,6 +103,7 @@ func appEngine(c martini.Context, r *http.Request) {
 var global Global
 
 func init() {
+	rand.Seed(time.Now().UTC().UnixNano())
 	godotenv.Load("secrets.env")
 	global.Tags = strings.Split(os.Getenv("TAGS"), ",")
 	global.InstagramClientID = os.Getenv("INSTAGRAM_CLIENT_ID")
@@ -128,13 +131,19 @@ func init() {
 		if strings.Index(update.Message.Text, "/start") == 0 {
 			log.Infof(c, "Start game with %v, %v", gamer.ChatID, update.Message.From.Username)
 			gamer.handleStart()
-			tele.SendPhoto(update.Message.Chat.ID, generateImage(gamer.NextQuestion(), httpClient), "", 0, gamer.GetKeyboard())
+			tele.SendPhoto(update.Message.Chat.ID, generateImage(gamer.GetCurrentQuestion(), httpClient), "", 0, gamer.GetKeyboard())
 			return
 		}
 		if strings.Index(update.Message.Text, "/stop") == 0 {
 			log.Infof(c, "Stop game with %v, %v", gamer.ChatID, update.Message.From.Username)
 			gamer.handleStop()
 			tele.SendMessage(update.Message.Chat.ID, "Game over", true, 0, nil)
+			return
+		}
+		if strings.Index(update.Message.Text, "/status") == 0 {
+			log.Infof(c, "Show game status for %v, %v", gamer.ChatID, update.Message.From.Username)
+			gamer.handleTop()
+			tele.SendMessage(update.Message.Chat.ID, fmt.Sprintf("Your personal score:\nRight answers: %v\nWrong answers: %v\n%v accuracy", gamer.RightAnswers, gamer.WrongAnswers, gamer.GetAccuracy() * 100), true, 0, nil)
 			return
 		}
 		if strings.Index(update.Message.Text, "/top") == 0 {
@@ -145,7 +154,7 @@ func init() {
 		}
 		if strings.Index(update.Message.Text, "/help") == 0 {
 			log.Infof(c, "Show help for %v, %v", gamer.ChatID, update.Message.From.Username)
-			tele.SendMessage(update.Message.Chat.ID, "Todo: help page", true, 0, nil)
+			tele.SendMessage(update.Message.Chat.ID, HelpText, true, 0, nil)
 			return
 		}
 		if gamer.isPlaying() {
@@ -161,7 +170,7 @@ func init() {
 			return
 		}
 		log.Infof(c, "Show help for %v, %v", gamer.ChatID, update.Message.From.Username)
-		tele.SendMessage(update.Message.Chat.ID, "Todo: help page", true, 0, nil)
+		tele.SendMessage(update.Message.Chat.ID, HelpText, true, 0, nil)
 	})
 	http.Handle("/", m)
 }
@@ -192,14 +201,22 @@ func generateImage(question Question, httpClient *http.Client) (img image.Image)
 }
 
 // GetKeyboard helper to generate keyboard markup
-func (gamer *Gamer) GetKeyboard() (kb *telegram.ReplyKeyboardMarkup) {
+func (gamer *Gamer) GetKeyboard() *telegram.ReplyKeyboardMarkup {
 	question := gamer.GetCurrentQuestion()
-	kb.OneTimeKeyboard = true
-	kb.Keyboard = [][]string{
-		[]string{question.Variants[0], question.Variants[1]},
-		[]string{question.Variants[2], question.Variants[3]},
+	kb := &telegram.ReplyKeyboardMarkup{
+		OneTimeKeyboard: true,
+		ResizeKeyboard: true,
+		Keyboard: [][]string{
+			[]string{question.Variants[0], question.Variants[1]},
+			[]string{question.Variants[2], question.Variants[3]},
+		},
 	}
-	return nil
+	return kb
+}
+
+// GetAccuracy - return persentage of right answers
+func (gamer *Gamer) GetAccuracy() float32 {
+	return float32(gamer.RightAnswers) / float32(gamer.RightAnswers + gamer.WrongAnswers)
 }
 
 // GetCurrentQuestion is helper method to get current question
@@ -234,18 +251,17 @@ func (gamer *Gamer) isPlaying() bool {
 }
 
 // NextQuestion return next question
-func (gamer *Gamer) NextQuestion() (question Question) {
-	question = gamer.GetCurrentQuestion()
+func (gamer *Gamer) NextQuestion() Question {
 	gamer.CurrentQuestion++
 	if gamer.CurrentQuestion == len(global.Tags) {
 		gamer.CurrentQuestion = 0
 	}
-	return
+	return gamer.GetCurrentQuestion()
 }
 
 func generateQuestionsQueue() []Question {
 	tags := global.Tags
-	answers := random.Perm(len(tags))
+	answers := rand.Perm(len(tags))
 	questions := make([]Question, 0, len(tags))
 	for answer := range answers {
 		variants := perm(4, len(tags), answer)
