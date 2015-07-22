@@ -17,11 +17,11 @@ import (
 	"github.com/codegangsta/martini-contrib/binding"
 	"github.com/joho/godotenv"
 
+	"fmt"
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/urlfetch"
-	"fmt"
 )
 
 const HelpText string = "Guess as more instagram tags as you can!\n/start - begin a quizz\n/stop - stop current quiz\n/status - see your results\n/top - show top 10 players"
@@ -46,12 +46,15 @@ type Gamer struct {
 	CurrentQuestion int        `json:"current_question"`
 	RightAnswers    int        `json:"right_answers"`
 	WrongAnswers    int        `json:"wrong_answers"`
+	Username        string     `json:"username"`
 }
 
 // GamerData is wrapper for appengine data store
 type GamerData struct {
-	GamerBlob string
-	Gamer     *Gamer `datastore:"-"`
+	GamerBlob    string
+	RightAnswers int64
+	WrongAnswers int64
+	Gamer        *Gamer `datastore:"-"`
 }
 
 // Load is google store Question struct loader
@@ -76,6 +79,16 @@ func (data *GamerData) Save() ([]datastore.Property, error) {
 			Value:   string(blob),
 			NoIndex: true,
 		},
+		datastore.Property{
+			Name:    "RightAnswers",
+			Value:   int64(data.RightAnswers),
+			NoIndex: false,
+		},
+		datastore.Property{
+			Name:    "WrongAnswers",
+			Value:   int64(data.WrongAnswers),
+			NoIndex: false,
+		},
 	}, nil
 }
 
@@ -89,8 +102,12 @@ func findGamer(c context.Context, id int64) (*Gamer, error) {
 }
 
 func saveGamer(c context.Context, gamer *Gamer) (err error) {
+	log.Infof(c, "Saving %v", gamer)
 	data := new(GamerData)
 	data.Gamer = gamer
+	data.RightAnswers = int64(gamer.RightAnswers)
+	data.WrongAnswers = int64(gamer.WrongAnswers)
+	log.Infof(c, "Data: %v", data)
 	key := datastore.NewKey(c, "Gamer", "", int64(gamer.ChatID), nil)
 	_, err = datastore.Put(c, key, data)
 	return
@@ -143,7 +160,7 @@ func init() {
 		if strings.Index(update.Message.Text, "/status") == 0 {
 			log.Infof(c, "Show game status for %v, %v", gamer.ChatID, update.Message.From.Username)
 			gamer.handleTop()
-			tele.SendMessage(update.Message.Chat.ID, fmt.Sprintf("Your personal score:\nRight answers: %v\nWrong answers: %v\n%v accuracy", gamer.RightAnswers, gamer.WrongAnswers, gamer.GetAccuracy() * 100), true, 0, nil)
+			tele.SendMessage(update.Message.Chat.ID, fmt.Sprintf("Your personal score:\nRight answers: %v\nWrong answers: %v\n%v accuracy", gamer.RightAnswers, gamer.WrongAnswers, gamer.GetAccuracy()*100), true, 0, nil)
 			return
 		}
 		if strings.Index(update.Message.Text, "/top") == 0 {
@@ -177,10 +194,12 @@ func init() {
 
 func findOrCreateGamer(update telegram.Update, c context.Context) (gamer *Gamer, err error) {
 	chatID := update.Message.Chat.ID
+	username := update.Message.From.Username
 	if gamer, err = findGamer(c, int64(chatID)); err != nil {
 		log.Infof(c, "Can't find gamer object for this chat: %v, %v", chatID, err)
 		gamer.handleStart()
 		gamer.ChatID = chatID
+		gamer.Username = username
 		if err := saveGamer(c, gamer); err != nil {
 			log.Errorf(c, "Can't store in DB new gamer %v: %v", gamer, err)
 			return nil, err
@@ -189,6 +208,7 @@ func findOrCreateGamer(update telegram.Update, c context.Context) (gamer *Gamer,
 	} else {
 		log.Infof(c, "Find gamer with id %v", chatID)
 	}
+	gamer.Username = username
 	return gamer, nil
 }
 
@@ -205,7 +225,7 @@ func (gamer *Gamer) GetKeyboard() *telegram.ReplyKeyboardMarkup {
 	question := gamer.GetCurrentQuestion()
 	kb := &telegram.ReplyKeyboardMarkup{
 		OneTimeKeyboard: true,
-		ResizeKeyboard: true,
+		ResizeKeyboard:  true,
 		Keyboard: [][]string{
 			[]string{question.Variants[0], question.Variants[1]},
 			[]string{question.Variants[2], question.Variants[3]},
@@ -216,7 +236,7 @@ func (gamer *Gamer) GetKeyboard() *telegram.ReplyKeyboardMarkup {
 
 // GetAccuracy - return persentage of right answers
 func (gamer *Gamer) GetAccuracy() float32 {
-	return float32(gamer.RightAnswers) / float32(gamer.RightAnswers + gamer.WrongAnswers)
+	return float32(gamer.RightAnswers) / float32(gamer.RightAnswers+gamer.WrongAnswers)
 }
 
 // GetCurrentQuestion is helper method to get current question
