@@ -236,6 +236,9 @@ func (gamer *Gamer) GetKeyboard() *telegram.ReplyKeyboardMarkup {
 
 // GetAccuracy - return persentage of right answers
 func (gamer *Gamer) GetAccuracy() float32 {
+	if gamer.RightAnswers+gamer.WrongAnswers == 0 {
+		return 0.0
+	}
 	return float32(gamer.RightAnswers) / float32(gamer.RightAnswers+gamer.WrongAnswers)
 }
 
