@@ -18,6 +18,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"fmt"
+
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
@@ -101,6 +102,24 @@ func findGamer(c context.Context, id int64) (*Gamer, error) {
 	return data.Gamer, nil
 }
 
+func findBestGamer(c context.Context) ([]*Gamer, error) {
+	q := datastore.NewQuery("Gamer").Order("-RightAnswers").Limit(20)
+	var gamersData []GamerData
+	_, err := q.GetAll(c, &gamersData)
+	if err != nil {
+		return []*Gamer{}, err
+	}
+	gamers := make([]*Gamer, len(gamersData))
+	for i, gamer := range gamersData {
+		gamers[i] = gamer.Gamer
+	}
+	return gamers, nil
+}
+
+func gamersCount(c context.Context) (int, error) {
+	return datastore.NewQuery("Gamer").Count(c)
+}
+
 func saveGamer(c context.Context, gamer *Gamer) (err error) {
 	log.Infof(c, "Saving %v", gamer)
 	data := new(GamerData)
@@ -130,7 +149,7 @@ func init() {
 	m.Use(appEngine)
 	m.Use(martini.Logger())
 	m.Get("/", func() string {
-		return "Hello world"
+		return "Questag bot"
 	})
 	m.Post("/bothook", binding.Bind(telegram.Update{}), func(c context.Context, update telegram.Update, w http.ResponseWriter) {
 		httpClient := urlfetch.Client(c)
@@ -159,14 +178,23 @@ func init() {
 		}
 		if strings.Index(update.Message.Text, "/status") == 0 {
 			log.Infof(c, "Show game status for %v, %v", gamer.ChatID, update.Message.From.Username)
-			gamer.handleTop()
 			tele.SendMessage(update.Message.Chat.ID, fmt.Sprintf("Your personal score:\nRight answers: %v\nWrong answers: %v\n%v accuracy", gamer.RightAnswers, gamer.WrongAnswers, gamer.GetAccuracy()*100), true, 0, nil)
 			return
 		}
 		if strings.Index(update.Message.Text, "/top") == 0 {
 			log.Infof(c, "Show top for %v, %v", gamer.ChatID, update.Message.From.Username)
-			gamer.handleTop()
-			tele.SendMessage(update.Message.Chat.ID, "Top 10 gamers", true, 0, nil)
+			gamers, err := findBestGamer(c)
+			count, _ := gamersCount(c)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				log.Errorf(c, "Can't find all gamers: %v", err)
+				return
+			}
+			top := fmt.Sprintf("Top 20 gamers. Total gamers - %v\n", count)
+			for i, g := range gamers {
+				top += fmt.Sprintf("%v - %v, Right answers: %v, Wrong answers: %v\n", i, g.Username, g.RightAnswers, g.WrongAnswers)
+			}
+			tele.SendMessage(update.Message.Chat.ID, top, true, 0, nil)
 			return
 		}
 		if strings.Index(update.Message.Text, "/help") == 0 {
@@ -254,7 +282,6 @@ func (gamer *Gamer) handleStop() {
 	gamer.Questions = nil
 	gamer.CurrentQuestion = 0
 }
-func (gamer *Gamer) handleTop()  {}
 func (gamer *Gamer) handleHelp() {}
 func (gamer *Gamer) handleAnswer(answer string) (isRight bool) {
 	currentQuestion := gamer.GetCurrentQuestion()
