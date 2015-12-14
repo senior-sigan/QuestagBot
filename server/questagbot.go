@@ -311,6 +311,7 @@ func (gamer *Gamer) NextQuestion() Question {
 
 func generateQuestionsQueue() []Question {
 	tags := global.Tags
+	rand.Seed(time.Now().UTC().UnixNano())
 	answers := rand.Perm(len(tags))
 	questions := make([]Question, 0, len(tags))
 	for answer := range answers {
