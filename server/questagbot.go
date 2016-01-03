@@ -15,6 +15,7 @@ import (
 	hexapic "github.com/blan4/hexapic/core"
 	"github.com/codegangsta/martini"
 	"github.com/codegangsta/martini-contrib/binding"
+	"github.com/codegangsta/martini-contrib/render"
 	"github.com/joho/godotenv"
 
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"google.golang.org/appengine/urlfetch"
 )
 
+// Help Text!!!
 const HelpText string = "Guess as more instagram tags as you can!\n/start - begin a quizz\n/stop - stop current quiz\n/status - see your results\n/top - show top 10 players"
 
 // Global is struct for saving state
@@ -147,9 +149,10 @@ func init() {
 
 	m := martini.Classic()
 	m.Use(appEngine)
+	m.Use(render.Renderer())
 	m.Use(martini.Logger())
-	m.Get("/", func() string {
-		return "Questag bot"
+	m.Get("/", func(r render.Render) {
+		r.Redirect("https://telegram.me/QuestagBot", 302)
 	})
 	m.Post("/bothook", binding.Bind(telegram.Update{}), func(c context.Context, update telegram.Update, w http.ResponseWriter) {
 		httpClient := urlfetch.Client(c)
@@ -192,7 +195,7 @@ func init() {
 			}
 			top := fmt.Sprintf("Top 20 gamers. Total gamers - %v\n", count)
 			for i, g := range gamers {
-				top += fmt.Sprintf("%v - %v, Right answers: %v, Wrong answers: %v\n", i, g.Username, g.RightAnswers, g.WrongAnswers)
+				top += fmt.Sprintf("%v - %v, Right answers: %v, Wrong answers: %v\n", i+1, g.Username, g.RightAnswers, g.WrongAnswers)
 			}
 			tele.SendMessage(update.Message.Chat.ID, top, true, 0, nil)
 			return
@@ -251,12 +254,13 @@ func generateImage(question Question, httpClient *http.Client) (img image.Image)
 // GetKeyboard helper to generate keyboard markup
 func (gamer *Gamer) GetKeyboard() *telegram.ReplyKeyboardMarkup {
 	question := gamer.GetCurrentQuestion()
+	v := rand.Perm(4)
 	kb := &telegram.ReplyKeyboardMarkup{
 		OneTimeKeyboard: true,
 		ResizeKeyboard:  true,
 		Keyboard: [][]string{
-			[]string{question.Variants[0], question.Variants[1]},
-			[]string{question.Variants[2], question.Variants[3]},
+			[]string{question.Variants[v[0]], question.Variants[v[1]]},
+			[]string{question.Variants[v[2]], question.Variants[v[3]]},
 		},
 	}
 	return kb
